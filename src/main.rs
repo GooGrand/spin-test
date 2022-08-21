@@ -1,23 +1,26 @@
+#![feature(test)]
+
 use rayon::prelude::*;
 use std::{thread, marker::Sync};
 
 const THERSHOLD: usize = 3;
 const K_THERSHOLD: u64 = 8;
 
-// fn computation_splitter_rayon<D, T, R>(data: D, f: fn(T) -> R) -> Vec<R> 
-// where 
-//     T: Copy, 
-//     D: IntoIterator + IndexedParallelIterator
-// {
-//     if data.len() > THERSHOLD {
-//         data.par_iter();
-//         vec![]
-//     } else {
-//         data.iter().map(|item| {
-//             f(*item)
-//         }).collect()
-//     }
-// }
+fn computation_splitter_rayon<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
+where 
+    T: Copy + Send + Sync, 
+    R: Send
+{
+    if data.len() > THERSHOLD {
+        data.into_par_iter().map(|item| {
+            f(item)
+        }).collect()
+    } else {
+        data.into_iter().map(|item| {
+            f(item)
+        }).collect()
+    }
+}
 
 fn computation_splitter_std<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
 where 
@@ -79,18 +82,27 @@ fn compute(item: u64) -> u64 {
 
 fn main() {
     let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
-    let res = computation_splitter_std(data, compute);
+    let res = computation_splitter_rayon(data, compute);
     println!("{:?}",  res);
 }
 
 
 mod test {
+    extern crate test;
     use super::*;
+    use test::Bencher;
 
     #[test]
     fn check_computation_splitter_std() {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
         let res = computation_splitter_std(data, compute);
+        assert_eq!(res, vec![0, 1, 7, 2, 8, 2, 88, 64, 47, 14]);
+    }
+
+    #[test]
+    fn check_computation_splitter_rayon() {
+        let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
+        let res = computation_splitter_rayon(data, compute);
         assert_eq!(res, vec![0, 1, 7, 2, 8, 2, 88, 64, 47, 14]);
     }
 
@@ -124,4 +136,17 @@ mod test {
         let (_, res) = computation_splitter_std_test(data, compute);
         assert_eq!(res, true);
     }
+
+    #[bench]
+    fn bench_rayon(b: &mut Bencher) {
+        let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
+        b.iter(|| computation_splitter_rayon(data.clone(), compute));
+    }
+
+    #[bench]
+    fn bench_std(b: &mut Bencher) {
+        let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
+        b.iter(|| computation_splitter_std(data.clone(), compute));
+    }
+
 }
