@@ -1,20 +1,23 @@
 #![feature(test)]
 
 use rayon::prelude::*;
-use std::{thread, marker::Sync};
+use std::{thread, marker::Sync, rc::Rc};
 
 const THERSHOLD: usize = 3;
 const K_THERSHOLD: u64 = 8;
 
-fn computation_splitter_rayon<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
+fn splitter_rayon_chunks<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
 where 
-    T: Copy + Send + Sync, 
-    R: Send
+    T: Send,
+    R: Clone + Send
 {
     if data.len() > THERSHOLD {
-        data.into_par_iter().map(|item| {
-            f(item)
-        }).collect()
+        data.into_par_iter().chunks(THERSHOLD)
+        .map(|chunk| {
+            chunk.into_iter()
+            .map(|item| f(item))
+            .collect::<Vec<R>>()
+        }).collect::<Vec<Vec<R>>>().concat()
     } else {
         data.into_iter().map(|item| {
             f(item)
@@ -22,7 +25,49 @@ where
     }
 }
 
-fn computation_splitter_std<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
+fn splitter_std_chunks<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
+where 
+    T: Copy + Send + Sync + 'static, 
+    R: Clone + Send + 'static,
+{
+    if data.len() > THERSHOLD {
+        data.chunks(THERSHOLD)
+        .map(|chunk| {
+            let chunk = chunk.to_owned();
+            thread::spawn(move || -> Vec<R> {
+                chunk.iter()
+                .map(|item| f(*item))
+                .collect::<Vec<R>>()
+            })
+        })
+        .map(|handle| {
+            handle.join().unwrap()
+        }).collect::<Vec<Vec<R>>>()
+        .concat()
+    } else {
+        data.into_iter().map(|item| {
+            f(item)
+        }).collect()
+    }
+}
+
+fn splitter_rayon<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
+where 
+    T: Send + Sync, 
+    R: Send 
+{
+    if data.len() > THERSHOLD {
+        data.into_par_iter().map(|item| {
+            f(item)
+        }).collect::<Vec<R>>()
+    } else {
+        data.into_iter().map(|item| {
+            f(item)
+        }).collect()
+    }
+}
+
+fn splitter_std<T, R>(data: Vec<T>, f: fn(T) -> R) -> Vec<R> 
 where 
     T: Sync + Send + 'static, 
     R: Send + 'static
@@ -42,7 +87,7 @@ where
     }
 }
 
-fn computation_splitter_std_test<T, R>(data: Vec<T>, f: fn(T) -> R) -> (Vec<R>, bool) 
+fn splitter_std_test<T, R>(data: Vec<T>, f: fn(T) -> R) -> (Vec<R>, bool) 
 where 
     T: Sync + Send + 'static, 
     R: Send + 'static
@@ -82,7 +127,7 @@ fn compute(item: u64) -> u64 {
 
 fn main() {
     let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
-    let res = computation_splitter_rayon(data, compute);
+    let res = splitter_std_chunks(data, compute);
     println!("{:?}",  res);
 }
 
@@ -95,14 +140,14 @@ mod test {
     #[test]
     fn check_computation_splitter_std() {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
-        let res = computation_splitter_std(data, compute);
+        let res = splitter_std(data, compute);
         assert_eq!(res, vec![0, 1, 7, 2, 8, 2, 88, 64, 47, 14]);
     }
 
     #[test]
     fn check_computation_splitter_rayon() {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
-        let res = computation_splitter_rayon(data, compute);
+        let res = splitter_rayon(data, compute);
         assert_eq!(res, vec![0, 1, 7, 2, 8, 2, 88, 64, 47, 14]);
     }
 
@@ -114,39 +159,51 @@ mod test {
         }
 
         let data = vec!["George", "Falcon", "Something"];
-        let res = computation_splitter_std(data, add_str);
+        let res = splitter_std(data, add_str);
         assert_eq!(res, vec!["George_prefix", "Falcon_prefix", "Something_prefix"]);
     }
 
     #[test]
     fn check_threads_spawn() {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
-        let (_, res) = computation_splitter_std_test(data, compute);
+        let (_, res) = splitter_std_test(data, compute);
         assert_eq!(res, true);
 
         let data = vec![1, 2,]; // less than 3 - one thread
-        let (_, res) = computation_splitter_std_test(data, compute);
+        let (_, res) = splitter_std_test(data, compute);
         assert_eq!(res, false);
 
         let data = vec![1, 2, 3]; // exact 3 should be calculated in one thread
-        let (_, res) = computation_splitter_std_test(data, compute);
+        let (_, res) = splitter_std_test(data, compute);
         assert_eq!(res, false);
 
         let data = vec![1, 2, 3, 4]; // over thershold
-        let (_, res) = computation_splitter_std_test(data, compute);
+        let (_, res) = splitter_std_test(data, compute);
         assert_eq!(res, true);
     }
 
     #[bench]
     fn bench_rayon(b: &mut Bencher) {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
-        b.iter(|| computation_splitter_rayon(data.clone(), compute));
+        b.iter(|| splitter_rayon(data.clone(), compute));
+    }
+
+    #[bench]
+    fn bench_rayon_chunks(b: &mut Bencher) {
+        let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
+        b.iter(|| splitter_rayon_chunks(data.clone(), compute));
     }
 
     #[bench]
     fn bench_std(b: &mut Bencher) {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
-        b.iter(|| computation_splitter_std(data.clone(), compute));
+        b.iter(|| splitter_std(data.clone(), compute));
+    }
+
+    #[bench]
+    fn bench_std_chunks(b: &mut Bencher) {
+        let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98]; // more than 3 so it's threading
+        b.iter(|| splitter_std_chunks(data.clone(), compute));
     }
 
 }
