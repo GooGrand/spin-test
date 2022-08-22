@@ -138,14 +138,14 @@ mod test {
     use test::Bencher;
 
     #[test]
-    fn check_computation_splitter_std() {
+    fn check_splitter_std() {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
         let res = splitter_std(data, compute);
         assert_eq!(res, vec![0, 1, 7, 2, 8, 2, 88, 64, 47, 14]);
     }
 
     #[test]
-    fn check_computation_splitter_rayon() {
+    fn check_splitter_rayon() {
         let data = vec![1, 2, 3, 4, 6, 12, 100, 75, 55, 98];
         let res = splitter_rayon(data, compute);
         assert_eq!(res, vec![0, 1, 7, 2, 8, 2, 88, 64, 47, 14]);
